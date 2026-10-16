@@ -7,8 +7,18 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import mlx_lm.server as mlx_server
-from mlx_lm.generate import SequenceStateMachine
 
+# mlx-lm server API generations this module adapts to:
+#  - text state machine (mlx-lm >= 0.32): GenerationContext carries a
+#    TextStateMachine (control sequences are stripped from decoded text by the
+#    HTTP handler) and Response has no state/match; stop tokens are matched by
+#    a StopSequences matcher on the producer side.
+#  - stateful (mlx-lm 0.31): token-level SequenceStateMachine, Response.state
+#    and Response.match.
+#  - earlier releases: neither.
+TEXT_STATE_MACHINE_API = "text_sm" in getattr(
+    mlx_server.GenerationContext, "__annotations__", {}
+)
 STATEFUL_SERVER_API = "state" in getattr(mlx_server.Response, "__annotations__", {})
 
 def thinking_enabled_for_request(cli_args: Any, request_args: Any = None) -> bool:
@@ -28,8 +38,23 @@ def build_generation_context(
     stop_words=None,
     sequences=None,
     has_thinking: Optional[bool] = None,
+    text_sm=None,
+    initial_state: str = "normal",
 ):
     thinking = tokenizer.has_thinking if has_thinking is None else bool(has_thinking)
+    if TEXT_STATE_MACHINE_API:
+        if text_sm is None:
+            from mlx_lm.generate import make_text_state_machine
+
+            text_sm = make_text_state_machine(tokenizer, stop_words)
+        return mlx_server.GenerationContext(
+            has_thinking=thinking,
+            has_tool_calling=tokenizer.has_tool_calling,
+            tool_parser=tokenizer.tool_parser,
+            text_sm=text_sm,
+            initial_state=initial_state,
+            prompt=prompt,
+        )
     if STATEFUL_SERVER_API:
         return mlx_server.GenerationContext(
             has_thinking=thinking,
@@ -55,6 +80,36 @@ def build_generation_context(
         prompt=prompt,
     )
 
+class _WithoutThinking:
+    """A tokenizer view that reports no reasoning markers."""
+
+    has_thinking = False
+
+    def __init__(self, tokenizer: Any):
+        self._tokenizer = tokenizer
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._tokenizer, name)
+
+def make_text_state_machines(
+    *,
+    tokenizer: Any,
+    stop_words: list[str],
+    include_thinking: bool = True,
+):
+    """(StopSequences, TextStateMachine) for the mlx-lm >= 0.32 server API.
+
+    With reasoning disabled the machine has no reasoning transitions, the same
+    rule make_state_machine applies to the token-level machine.
+    """
+    from mlx_lm.generate import make_stop_sequences, make_text_state_machine
+
+    view = tokenizer if include_thinking else _WithoutThinking(tokenizer)
+    return (
+        make_stop_sequences(view, stop_words),
+        make_text_state_machine(view, stop_words),
+    )
+
 def make_state_machine(
     *,
     tokenizer: Any,
@@ -62,6 +117,8 @@ def make_state_machine(
     initial_state: str = "normal",
     include_thinking: bool = True,
 ):
+    from mlx_lm.generate import SequenceStateMachine
+
     if not include_thinking and initial_state == "reasoning":
         initial_state = "normal"
 
@@ -133,6 +190,10 @@ def match_stream_token(
 ) -> tuple[Optional[Any], Optional[tuple[int, ...]], Optional[str], bool]:
     if sm is None:
         return sm_state, None, "normal", False
+    if TEXT_STATE_MACHINE_API:
+        # `sm` is a StopSequences matcher (advances in place); control
+        # sequences are stripped from the text by the HTTP handler.
+        return sm_state, None, "normal", bool(sm.advance(token))
     if sm_state is None or sm_state[0] is None:
         return sm_state, None, None, True
     next_state, match_sequence, current_state = sm.match(sm_state, token)

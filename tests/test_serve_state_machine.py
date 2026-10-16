@@ -9,16 +9,26 @@ from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
-from mlx_lm.generate import SequenceStateMachine
 
 from dflash_mlx import serve
 from dflash_mlx.server import metrics as metrics_mod
 from dflash_mlx.server import runtime as server_runtime_mod
 from dflash_mlx.serve import DFlashAPIHandler, DFlashResponseGenerator
 from dflash_mlx.server.protocol import (
+    STATEFUL_SERVER_API,
+    TEXT_STATE_MACHINE_API,
     build_generation_context,
     match_stream_token,
     thinking_enabled_for_request,
+)
+
+stateful_api_only = pytest.mark.skipif(
+    not STATEFUL_SERVER_API,
+    reason="needs the mlx-lm 0.31 token-level SequenceStateMachine server API",
+)
+text_api_only = pytest.mark.skipif(
+    not TEXT_STATE_MACHINE_API,
+    reason="needs the mlx-lm >= 0.32 TextStateMachine server API",
 )
 from dflash_mlx.server.tool_calls import ToolCallParseError
 from dflash_mlx.server.metrics import (
@@ -67,7 +77,10 @@ class _FakeResponseGenerator:
             raise RuntimeError("worker join failed")
 
 
+@stateful_api_only
 def test_match_stream_token_terminal_state_is_not_reused():
+    from mlx_lm.generate import SequenceStateMachine
+
     sm = SequenceStateMachine(
         transitions={"normal": [((42,), None)]},
         initial="normal",
@@ -86,6 +99,17 @@ def test_match_stream_token_terminal_state_is_not_reused():
     assert match2 is None
     assert current2 is None
     assert terminal2 is True
+
+@text_api_only
+def test_match_stream_token_stop_matcher_flags_stop_sequences():
+    from mlx_lm.generate import StopSequences
+
+    matcher = StopSequences([(42,), (7, 8)]).matcher()
+
+    assert match_stream_token(matcher, None, 1) == (None, None, "normal", False)
+    assert match_stream_token(matcher, None, 7) == (None, None, "normal", False)
+    assert match_stream_token(matcher, None, 8) == (None, None, "normal", True)
+    assert match_stream_token(matcher, None, 42) == (None, None, "normal", True)
 
 def test_match_stream_token_absent_state_machine_is_normal():
     state, match, current, terminal = match_stream_token(None, None, 42)
@@ -400,6 +424,7 @@ class _ThinkingTokenizer:
     think_start = "<think>"
     think_end = "</think>"
     has_tool_calling = False
+    structural_markers = ()
     tool_parser = None
 
     def convert_ids_to_tokens(self, token_id):
@@ -413,6 +438,7 @@ def _state_after(sm, token):
     state, _match, current = sm.match(state, token)
     return current
 
+@stateful_api_only
 def test_response_generator_disables_reasoning_state_when_thinking_is_off():
     generator = object.__new__(DFlashResponseGenerator)
     generator._state_machine_cache = {}
@@ -429,6 +455,7 @@ def test_response_generator_disables_reasoning_state_when_thinking_is_off():
     assert _state_after(sm, 10) == "normal"
     assert (10,) not in sequences
 
+@stateful_api_only
 def test_response_generator_keeps_reasoning_state_when_thinking_is_on():
     generator = object.__new__(DFlashResponseGenerator)
     generator._state_machine_cache = {}
@@ -442,6 +469,53 @@ def test_response_generator_keeps_reasoning_state_when_thinking_is_on():
 
     assert _state_after(sm, 10) == "reasoning"
     assert sequences[(10,)] == "<think>"
+
+def _text_state_after(text_sm, text, initial="normal"):
+    _state, _clean, current = text_sm.step(text_sm.make_state(initial), text)
+    return current
+
+@text_api_only
+def test_response_generator_text_machine_has_no_reasoning_when_thinking_is_off():
+    generator = object.__new__(DFlashResponseGenerator)
+    generator._state_machine_cache = {}
+    generator._current_thinking_enabled = False
+
+    _stop, text_sm = generator._make_state_machine(
+        ("model", None, "draft"),
+        _ThinkingTokenizer(),
+        [],
+    )
+
+    assert _text_state_after(text_sm, "<think>") == "normal"
+
+@text_api_only
+def test_response_generator_text_machine_keeps_reasoning_when_thinking_is_on():
+    generator = object.__new__(DFlashResponseGenerator)
+    generator._state_machine_cache = {}
+    generator._current_thinking_enabled = True
+
+    stop, text_sm = generator._make_state_machine(
+        ("model", None, "draft"),
+        _ThinkingTokenizer(),
+        ["END"],
+    )
+
+    assert _text_state_after(text_sm, "<think>") == "reasoning"
+    # the stop matcher flags EOS and stop-word tokens
+    matcher = stop.matcher()
+    assert matcher.advance(5) is False
+    assert matcher.advance(0) is True
+
+@text_api_only
+def test_generation_context_carries_text_state_machine_and_initial_state():
+    tokenizer = _ThinkingTokenizer()
+
+    ctx = build_generation_context(
+        tokenizer, [1, 2, 3], has_thinking=True, initial_state="reasoning"
+    )
+
+    assert ctx.initial_state == "reasoning"
+    assert _text_state_after(ctx.text_sm, "</think>", "reasoning") == "normal"
 
 def test_generation_context_honors_effective_thinking_flag():
     tokenizer = _ThinkingTokenizer()

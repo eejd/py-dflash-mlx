@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -99,9 +100,17 @@ def normalize_parallel_tool_calls(value: Any) -> bool:
     return value
 
 
+def _infer_parser_type(tokenizer: Any) -> str | None:
+    infer = tokenizer_utils._infer_tool_parser
+    # mlx-lm >= 0.32 infers from the tokenizer (template, then vocab); earlier
+    # releases took the chat template string.
+    if "tokenizer" in inspect.signature(infer).parameters:
+        return infer(tokenizer)
+    return infer(getattr(tokenizer, "chat_template", None))
+
+
 def _refresh_parser_from_template(tokenizer: Any) -> None:
-    chat_template = getattr(tokenizer, "chat_template", None)
-    parser_type = tokenizer_utils._infer_tool_parser(chat_template)
+    parser_type = _infer_parser_type(tokenizer)
     if parser_type is None:
         return
 

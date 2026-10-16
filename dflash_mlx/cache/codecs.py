@@ -260,12 +260,17 @@ def serialize_target_cache(
                 )
                 gdn.append(None)
         elif isinstance(entry, KVCache):
-            state = entry.state
-            if state is None or state[0] is None:
+            if entry.keys is None:
                 fa.append(None)
                 gdn.append(None)
             else:
-                k, v = state
+                # mlx-lm >= 0.32: `state` is (keys, values, offset) over the
+                # whole allocation and keys_and_values() is the live view;
+                # earlier releases returned the live (keys, values) as `state`.
+                if hasattr(entry, "keys_and_values"):
+                    k, v = entry.keys_and_values()
+                else:
+                    k, v = entry.state
                 fa.append((grab(k), grab(v), int(entry.offset)))
                 gdn.append(None)
         else:

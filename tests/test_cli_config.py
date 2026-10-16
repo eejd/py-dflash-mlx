@@ -145,7 +145,9 @@ def test_model_provider_adds_mlx_lm_server_boundary_defaults(monkeypatch):
         load_calls.append(kwargs)
         return SimpleNamespace(
             target_model=SimpleNamespace(parameters=lambda: []),
-            tokenizer=SimpleNamespace(chat_template=None, default_chat_template=None),
+            tokenizer=SimpleNamespace(
+                chat_template=None, default_chat_template=None, get_vocab=dict
+            ),
             draft_model=SimpleNamespace(parameters=lambda: []),
             target_meta={},
             draft_meta={"draft_quant_source": "model_default"},
@@ -195,7 +197,9 @@ def test_model_provider_preserves_dflash_fields_if_parent_preloads(monkeypatch):
         "load_runtime_bundle",
         lambda **_kwargs: SimpleNamespace(
             target_model=SimpleNamespace(parameters=lambda: []),
-            tokenizer=SimpleNamespace(chat_template=None, default_chat_template=None),
+            tokenizer=SimpleNamespace(
+                chat_template=None, default_chat_template=None, get_vocab=dict
+            ),
             draft_model=SimpleNamespace(parameters=lambda: []),
             target_meta={},
             draft_meta={"draft_quant_source": "none"},
@@ -233,7 +237,9 @@ def test_model_provider_materialization_failure_does_not_publish_loaded_state(mo
         "load_runtime_bundle",
         lambda **_kwargs: SimpleNamespace(
             target_model=target_model,
-            tokenizer=SimpleNamespace(chat_template=None, default_chat_template=None),
+            tokenizer=SimpleNamespace(
+                chat_template=None, default_chat_template=None, get_vocab=dict
+            ),
             draft_model=draft_model,
             target_meta={},
             draft_meta={"draft_quant_source": "model_default"},

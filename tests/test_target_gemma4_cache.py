@@ -52,7 +52,7 @@ def _temporal_key_values(cache: RotatingKVCache) -> list[int]:
     return np.array(keys).reshape(-1).astype(int).tolist()
 
 def _state_key_values(cache: KVCache) -> list[int]:
-    keys, _ = cache.state
+    keys, _ = cache.keys_and_values() if hasattr(cache, "keys_and_values") else cache.state
     mx.eval(keys)
     return np.array(keys).reshape(-1).astype(int).tolist()
 

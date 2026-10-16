@@ -45,6 +45,10 @@ class PreparedDFlashRequest:
     state_machine: Any | None
     state_machine_state: Any | None
     has_thinking: bool
+    # mlx-lm >= 0.32: the text state machine the HTTP handler reads and the
+    # state the stream starts in (`state_machine` is then a stop matcher).
+    text_state_machine: Any | None = None
+    initial_state: str = "normal"
 
 
 class ServerRuntime:
@@ -126,6 +130,8 @@ class ServerRuntime:
             stop_words=args.stop_words,
             sequences=prepared.sequences,
             has_thinking=prepared.has_thinking,
+            text_sm=prepared.text_state_machine,
+            initial_state=prepared.initial_state,
         )
         rqueue.put(ctx)
 

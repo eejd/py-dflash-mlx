@@ -40,7 +40,9 @@ from dflash_mlx.server.config import (
 )
 from dflash_mlx.server.protocol import (
     STATEFUL_SERVER_API as _STATEFUL_SERVER_API,
+    TEXT_STATE_MACHINE_API as _TEXT_STATE_MACHINE_API,
     make_state_machine as _make_state_machine,
+    make_text_state_machines as _make_text_state_machines,
     thinking_enabled_for_request as _thinking_enabled_for_request,
 )
 from dflash_mlx.server.metrics import (
@@ -145,10 +147,26 @@ class DFlashResponseGenerator(mlx_server.ResponseGenerator):
         initial_state="normal",
     ):
         include_thinking = bool(getattr(self, "_current_thinking_enabled", True))
-        cache_key = (model_key, tuple(stop_words), initial_state, include_thinking)
+        if _TEXT_STATE_MACHINE_API:
+            # mlx-lm >= 0.32 uses (StopSequences, TextStateMachine); the
+            # starting state travels in the GenerationContext instead.
+            cache_key = (model_key, tuple(stop_words), include_thinking)
+        else:
+            cache_key = (model_key, tuple(stop_words), initial_state, include_thinking)
         cached = self._state_machine_cache.get(cache_key)
         if cached is not None:
             return cached
+
+        if _TEXT_STATE_MACHINE_API:
+            machines = _make_text_state_machines(
+                tokenizer=tokenizer,
+                stop_words=stop_words,
+                include_thinking=include_thinking,
+            )
+            if len(self._state_machine_cache) > 100:
+                self._state_machine_cache.clear()
+            self._state_machine_cache[cache_key] = machines
+            return machines
 
         sm, sequences = _make_state_machine(
             tokenizer=tokenizer,
@@ -179,7 +197,15 @@ class DFlashResponseGenerator(mlx_server.ResponseGenerator):
         sm = None
         sm_state = None
         sequences = {}
-        if _STATEFUL_SERVER_API and hasattr(self, "_make_state_machine"):
+        text_sm = None
+        if _TEXT_STATE_MACHINE_API:
+            stop_sequences, text_sm = self._make_state_machine(
+                self.model_provider.model_key,
+                tokenizer,
+                args.stop_words,
+            )
+            sm = stop_sequences.matcher()
+        elif _STATEFUL_SERVER_API and hasattr(self, "_make_state_machine"):
             sm, sequences = self._make_state_machine(
                 self.model_provider.model_key,
                 tokenizer,
@@ -194,9 +220,11 @@ class DFlashResponseGenerator(mlx_server.ResponseGenerator):
             state_machine=sm,
             state_machine_state=sm_state,
             has_thinking=has_thinking,
+            text_state_machine=text_sm,
+            initial_state=initial_state,
         )
 
-    def _serve_single(self, request):
+    def _serve_single(self, request, *stream):
         request_tuple = request
         rqueue, request, args = request_tuple
 
@@ -241,7 +269,7 @@ class DFlashResponseGenerator(mlx_server.ResponseGenerator):
                 )
                 try:
                     self.model_provider.draft_model = None
-                    result = super()._serve_single((rqueue, request, args))
+                    result = super()._serve_single((rqueue, request, args), *stream)
                     completed = True
                     return result
                 finally:

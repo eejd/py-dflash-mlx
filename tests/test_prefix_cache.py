@@ -34,6 +34,11 @@ from dflash_mlx.server.prefix_cache_flow import (
     compute_stable_prefix_len,
 )
 
+def _live_kv(cache: KVCache):
+    # mlx-lm >= 0.32: state is (keys, values, offset) over the whole
+    # allocation; keys_and_values() is the live view older releases returned.
+    return cache.keys_and_values() if hasattr(cache, "keys_and_values") else cache.state
+
 def _make_kv_cache_populated(n_tokens: int = 4, hkv: int = 2, d: int = 8) -> KVCache:
     cache = KVCache()
     keys = mx.arange(1 * hkv * n_tokens * d, dtype=mx.float32).reshape(1, hkv, n_tokens, d)
@@ -529,8 +534,8 @@ class TestSerializeHydrate:
         assert isinstance(hydrated[0], KVCache)
         assert hydrated[0].offset == 5
 
-        src_k, src_v = src[0].state
-        h_k, h_v = hydrated[0].state
+        src_k, src_v = _live_kv(src[0])
+        h_k, h_v = _live_kv(hydrated[0])
         assert mx.all(src_k == h_k).item()
         assert mx.all(src_v == h_v).item()
 
@@ -553,8 +558,8 @@ class TestSerializeHydrate:
             key=_make_key(),
         )
         hydrated = hydrate_target_cache(snapshot, template)
-        src_k, src_v = src[0].state
-        h_k, h_v = hydrated[0].state
+        src_k, src_v = _live_kv(src[0])
+        h_k, h_v = _live_kv(hydrated[0])
         assert mx.all(src_k == h_k).item()
         assert mx.all(src_v == h_v).item()
 

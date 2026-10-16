@@ -8,6 +8,7 @@ import sys
 import time
 
 import mlx.core as mx
+import mlx_lm.generate as mlx_lm_generate
 import mlx_lm.server as mlx_server
 
 from dflash_mlx.runtime.bundle import load_runtime_bundle
@@ -15,6 +16,8 @@ from dflash_mlx.runtime.registry import resolve_optional_draft_ref
 from dflash_mlx.server.tool_calls import install_tool_parser
 
 # mlx_lm 0.31.x ModelProvider / ResponseGenerator read these attrs directly.
+# The kv_* entries are read by mlx_lm >= 0.32 (KV cache quantization in the
+# non-speculative path); they keep it off.
 _MLX_LM_SERVER_DEFAULTS: dict[str, object | None] = {
     "adapter_path": None,
     "pipeline": False,
@@ -23,6 +26,9 @@ _MLX_LM_SERVER_DEFAULTS: dict[str, object | None] = {
     "decode_concurrency": 32,
     "prompt_concurrency": 8,
     "prompt_cache_bytes": None,
+    "kv_bits": None,
+    "kv_group_size": 64,
+    "quantized_kv_start": getattr(mlx_lm_generate, "DEFAULT_QUANTIZED_KV_START", 5000),
 }
 
 class DFlashModelProvider(mlx_server.ModelProvider):
