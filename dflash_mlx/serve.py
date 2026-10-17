@@ -43,6 +43,8 @@ from dflash_mlx.server.protocol import (
     TEXT_STATE_MACHINE_API as _TEXT_STATE_MACHINE_API,
     make_state_machine as _make_state_machine,
     make_text_state_machines as _make_text_state_machines,
+    replace_initial_state as _replace_initial_state,
+    split_tokenized as _split_tokenized,
     thinking_enabled_for_request as _thinking_enabled_for_request,
 )
 from dflash_mlx.server.metrics import (
@@ -130,13 +132,12 @@ class DFlashResponseGenerator(mlx_server.ResponseGenerator):
 
     def _tokenize(self, tokenizer, request, args):
         tokenized = super()._tokenize(tokenizer, request, args)
-        if (
-            not bool(getattr(self, "_current_thinking_enabled", True))
-            and isinstance(tokenized, tuple)
-            and len(tokenized) == 4
-        ):
-            prompt, segments, segment_types, _initial_state = tokenized
-            return prompt, segments, segment_types, "normal"
+        if not bool(getattr(self, "_current_thinking_enabled", True)):
+            _, initial_state = _split_tokenized(tokenized)
+            # Only a reasoning start is dropped; any other start state the
+            # tokenizer sets (mlx-lm >= 0.32.1 response_initial_state) stays.
+            if initial_state == "reasoning":
+                return _replace_initial_state(tokenized, "normal")
         return tokenized
 
     def _make_state_machine(
@@ -187,12 +188,9 @@ class DFlashResponseGenerator(mlx_server.ResponseGenerator):
         *,
         has_thinking: bool,
     ) -> PreparedDFlashRequest:
-        tokenized = self._tokenize(tokenizer, request, args)
-        if isinstance(tokenized, tuple):
-            prompt, _, _, initial_state = tokenized
-        else:
-            prompt = tokenized
-            initial_state = "normal"
+        prompt, initial_state = _split_tokenized(
+            self._tokenize(tokenizer, request, args)
+        )
 
         sm = None
         sm_state = None

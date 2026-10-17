@@ -21,6 +21,44 @@ TEXT_STATE_MACHINE_API = "text_sm" in getattr(
 )
 STATEFUL_SERVER_API = "state" in getattr(mlx_server.Response, "__annotations__", {})
 
+# `ResponseGenerator._tokenize` returns (prompt, segments, segment_types,
+# initial_state) in mlx-lm <= 0.32.0 and appends `vision` (the images of the
+# prompt, None for text) in mlx-lm >= 0.32.1. Callers read the fields they
+# need by position and leave the rest alone, so one more trailing field in a
+# later release does not break them. DFlash serves text targets (its
+# ModelProvider never loads a processor), so `vision` is always None here.
+_TOKENIZED_INITIAL_STATE = 3
+
+
+def split_tokenized(tokenized: Any) -> tuple[Any, str]:
+    """Return (prompt, initial_state) from the value of `_tokenize`.
+
+    Accepts the bare prompt of the oldest servers and a tuple of at least
+    four fields; any fields after `initial_state` are ignored.
+    """
+    if not isinstance(tokenized, tuple):
+        return tokenized, "normal"
+    if len(tokenized) <= _TOKENIZED_INITIAL_STATE:
+        raise ValueError(
+            "unsupported mlx-lm _tokenize result: expected (prompt, segments, "
+            f"segment_types, initial_state, ...), got {len(tokenized)} fields"
+        )
+    return tokenized[0], tokenized[_TOKENIZED_INITIAL_STATE]
+
+
+def replace_initial_state(tokenized: Any, initial_state: str) -> Any:
+    """Return `tokenized` with its `initial_state` field replaced.
+
+    Other fields keep their position, so a tuple longer than four fields keeps
+    its trailing ones. Values that are not such a tuple are returned as is.
+    """
+    if not isinstance(tokenized, tuple) or len(tokenized) <= _TOKENIZED_INITIAL_STATE:
+        return tokenized
+    fields = list(tokenized)
+    fields[_TOKENIZED_INITIAL_STATE] = initial_state
+    return tuple(fields)
+
+
 def thinking_enabled_for_request(cli_args: Any, request_args: Any = None) -> bool:
     chat_args = getattr(cli_args, "chat_template_args", None)
     enabled = True
