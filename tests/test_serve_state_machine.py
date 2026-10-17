@@ -425,6 +425,8 @@ class _ThinkingTokenizer:
     think_end = "</think>"
     has_tool_calling = False
     structural_markers = ()
+    # read by mlx-lm >= 0.32.1 make_text_state_machine
+    response_transitions = {}
     tool_parser = None
 
     def convert_ids_to_tokens(self, token_id):
