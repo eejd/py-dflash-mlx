@@ -48,6 +48,12 @@ def make_tool_parser(
         )
 
     parse._dflash_tool_parser = True  # type: ignore[attr-defined]
+    # mlx-lm's BareToolCallFilter.for_parser reads a parser's bare-call markers
+    # (bare_tool_call_start/end, bare_tool_call_filter) from sys.modules[parser.__module__].
+    # Report the wrapped parser's module, or a bare call (no <function= / <|python_tag|>
+    # marker) would come back as message text under `dflash serve`.
+    if upstream_parser is not None:
+        parse.__module__ = upstream_parser.__module__
     return parse
 
 

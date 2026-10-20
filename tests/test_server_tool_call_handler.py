@@ -13,11 +13,12 @@ import json
 import threading
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
-from types import SimpleNamespace
 
 import mlx_lm.server as mlx_server
 import pytest
+from mlx_lm.tool_parsers import qwen3_coder
 
+from dflash_mlx.serve import DFlashAPIHandler, DFlashResponseGenerator
 from dflash_mlx.server.config import build_parser, normalize_cli_args
 from dflash_mlx.server.protocol import (
     TEXT_STATE_MACHINE_API,
@@ -26,13 +27,12 @@ from dflash_mlx.server.protocol import (
 )
 from dflash_mlx.server.runtime import ServerRuntime
 from dflash_mlx.server.tool_calls import make_tool_parser
-from dflash_mlx.serve import DFlashAPIHandler, DFlashResponseGenerator
 from tests.test_serve_tokenize_compat import _FakeProvider, _FakeTokenizer
 
 try:
-    from mlx_lm.tool_parsers import NotAToolCall
+    from mlx_lm.tool_parsers import NotAToolCall, llama3
 except ImportError:  # mlx-lm without eejd/py-mlx-lm#8
-    NotAToolCall = None
+    NotAToolCall = llama3 = None
 
 needs_not_a_tool_call = pytest.mark.skipif(
     NotAToolCall is None, reason="needs mlx-lm with eejd/py-mlx-lm#8 (NotAToolCall)"
@@ -199,3 +199,37 @@ def test_not_a_tool_call_comes_back_as_message_text(serve, stream):
     assert content == "plain answer"
     assert calls == []
     assert finish == "stop"
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+@pytest.mark.parametrize(
+    "parser_module, answer",
+    [
+        (
+            qwen3_coder,
+            "<function=lookup>\n<parameter=query>\nx\n</parameter>\n</function>",
+        ),
+        pytest.param(
+            llama3,
+            '{"name": "lookup", "parameters": {"query": "x"}}',
+            marks=needs_not_a_tool_call,
+        ),
+    ],
+    ids=["qwen3_coder", "llama3"],
+)
+def test_bare_call_without_start_marker_is_a_tool_call(
+    serve, parser_module, answer, stream
+):
+    if not hasattr(mlx_server, "BareToolCallFilter"):
+        pytest.skip("mlx-lm without bare-call filters")
+    port = serve(make_tool_parser(parser_module.parse_tool_call), answer)
+
+    status, content, calls, finish = _ask(port, stream)
+
+    # The model wrote the call without <tool_call> / <|python_tag|>: mlx-lm's bare-call
+    # filter of the parser's module must still see it through dflash's wrapper.
+    assert status == 200
+    assert content == ""
+    assert [c["function"]["name"] for c in calls] == ["lookup"]
+    assert json.loads(calls[0]["function"]["arguments"]) == {"query": "x"}
+    assert finish == "tool_calls"

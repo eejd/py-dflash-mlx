@@ -190,6 +190,29 @@ def test_wrapper_uses_the_not_a_tool_call_class_mlx_lm_knows():
     assert tool_calls_module.NotAToolCall is known
 
 
+@pytest.mark.skipif(
+    not hasattr(mlx_server, "BareToolCallFilter"),
+    reason="mlx-lm without bare-call filters",
+)
+@pytest.mark.parametrize(
+    "parser_module",
+    [qwen3_coder, pytest.param(llama3, marks=needs_not_a_tool_call)],
+    ids=["qwen3_coder", "llama3"],
+)
+def test_wrapped_parser_resolves_the_bare_call_filter_of_its_module(parser_module):
+    # BareToolCallFilter.for_parser finds a parser's bare-call markers through
+    # sys.modules[parser.__module__]; the wrapper must not hide them.
+    raw = mlx_server.BareToolCallFilter.for_parser(
+        parser_module.parse_tool_call, _tools()
+    )
+    wrapped = mlx_server.BareToolCallFilter.for_parser(
+        make_tool_parser(parser_module.parse_tool_call), _tools()
+    )
+
+    assert raw is not None
+    assert type(wrapped) is type(raw)
+
+
 def test_openai_function_shape_accepts_string_arguments():
     parser = make_tool_parser(qwen3_coder.parse_tool_call)
 
