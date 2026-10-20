@@ -12,6 +12,15 @@ from typing import Any
 
 from mlx_lm import tokenizer_utils
 
+try:
+    # mlx-lm local builds with eejd/py-mlx-lm#8: a parser raises NotAToolCall for text
+    # that is not a call, and ToolCallFormatter returns that text as message content.
+    from mlx_lm.tool_parsers import NotAToolCall
+except ImportError:  # earlier mlx-lm: no parser raises it
+
+    class NotAToolCall(ValueError):  # type: ignore[no-redef]
+        pass
+
 
 class ToolCallParseError(RuntimeError):
     pass
@@ -54,6 +63,11 @@ def parse_tool_call_span(
         try:
             parsed = upstream_parser(raw, tools)
             return _normalize_parsed_calls(parsed, tools=tools)
+        except NotAToolCall:
+            # The parser says the text is content, not a malformed call: the
+            # formatter returns it as message text. Neither the JSON fallback
+            # nor ToolCallParseError (which fails the request) applies.
+            raise
         except (ValueError, json.JSONDecodeError, SyntaxError) as exc:
             upstream_error = exc
 

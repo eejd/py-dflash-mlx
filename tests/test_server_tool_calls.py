@@ -11,6 +11,11 @@ import pytest
 from mlx_lm.server import ToolCallFormatter
 from mlx_lm.tool_parsers import gemma4, qwen3_coder
 
+try:
+    from mlx_lm.tool_parsers import NotAToolCall, llama3
+except ImportError:  # mlx-lm without eejd/py-mlx-lm#8
+    NotAToolCall = llama3 = None
+
 from dflash_mlx.server.tool_calls import (
     ToolCallParseError,
     apply_tool_choice,
@@ -18,6 +23,23 @@ from dflash_mlx.server.tool_calls import (
     make_tool_parser,
     normalize_parallel_tool_calls,
 )
+
+needs_not_a_tool_call = pytest.mark.skipif(
+    NotAToolCall is None,
+    reason="needs mlx-lm with eejd/py-mlx-lm#8 (NotAToolCall, llama3 parser)",
+)
+
+
+def _format(formatter, texts):
+    """(tool_calls, content) from either ToolCallFormatter return shape.
+
+    mlx-lm up to 0.32.2-local03 returns the list of calls; with eejd/py-mlx-lm#8
+    it returns (calls, content), content being the text a parser said is not a call.
+    """
+    result = formatter(texts)
+    if isinstance(result, tuple):
+        return result
+    return result, ""
 
 
 def _tools():
@@ -71,8 +93,11 @@ def test_upstream_formatter_emits_openai_tool_call_from_json_fallback():
     parser = make_tool_parser(qwen3_coder.parse_tool_call)
     formatter = ToolCallFormatter(parser, _tools(), streaming=True)
 
-    calls = formatter([json.dumps({"name": "lookup", "arguments": {"query": "x"}})])
+    calls, content = _format(
+        formatter, [json.dumps({"name": "lookup", "arguments": {"query": "x"}})]
+    )
 
+    assert content == ""
     assert calls[0]["type"] == "function"
     assert calls[0]["index"] == 0
     assert calls[0]["function"]["name"] == "lookup"
@@ -85,6 +110,35 @@ def test_upstream_formatter_does_not_swallow_strict_parse_errors():
 
     with pytest.raises(ToolCallParseError, match="failed to parse tool call"):
         formatter(["not json"])
+
+
+@needs_not_a_tool_call
+def test_not_a_tool_call_reaches_the_formatter_as_content():
+    def upstream(text, tools):
+        raise NotAToolCall("plain answer")
+
+    formatter = ToolCallFormatter(make_tool_parser(upstream), _tools())
+
+    # Not a ToolCallParseError, and not the JSON fallback: the formatter's
+    # content channel gets the parser's text.
+    assert formatter(["{}"]) == ([], "plain answer")
+
+
+@needs_not_a_tool_call
+def test_llama3_parser_through_the_dflash_wrapper():
+    formatter = ToolCallFormatter(make_tool_parser(llama3.parse_tool_call), _tools())
+
+    calls, content = formatter(
+        ['<|python_tag|>{"name": "lookup", "parameters": {"query": "x"}}']
+    )
+    assert content == ""
+    assert [c["function"]["name"] for c in calls] == ["lookup"]
+    assert json.loads(calls[0]["function"]["arguments"]) == {"query": "x"}
+
+    # Code behind the tag, and a call to an undeclared tool, are content.
+    assert formatter(["<|python_tag|>print(1)"]) == ([], "print(1)")
+    undeclared = '{"name": "other", "parameters": {}}'
+    assert formatter([undeclared]) == ([], undeclared)
 
 
 def test_openai_function_shape_accepts_string_arguments():
