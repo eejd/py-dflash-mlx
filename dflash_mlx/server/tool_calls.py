@@ -12,6 +12,18 @@ from typing import Any
 
 from mlx_lm import tokenizer_utils
 
+try:
+    # mlx-lm local builds with eejd/py-mlx-lm#8: a parser raises NotAToolCall for text
+    # that is not a call, and ToolCallFormatter returns that text as message content.
+    from mlx_lm.tool_parsers import NotAToolCall
+except ImportError:
+    # mlx-lm without #8: its ToolCallFormatter does not know NotAToolCall and no
+    # parser raises it; the class only keeps the `except NotAToolCall` clause valid.
+    # tests/test_server_tool_calls.py runs this path against a copy of the module.
+
+    class NotAToolCall(ValueError):  # type: ignore[no-redef]
+        pass
+
 
 class ToolCallParseError(RuntimeError):
     pass
@@ -36,6 +48,12 @@ def make_tool_parser(
         )
 
     parse._dflash_tool_parser = True  # type: ignore[attr-defined]
+    # mlx-lm's BareToolCallFilter.for_parser reads a parser's bare-call markers
+    # (bare_tool_call_start/end, bare_tool_call_filter) from sys.modules[parser.__module__].
+    # Report the wrapped parser's module, or a bare call (no <function= / <|python_tag|>
+    # marker) would come back as message text under `dflash serve`.
+    if upstream_parser is not None:
+        parse.__module__ = upstream_parser.__module__
     return parse
 
 
@@ -54,6 +72,11 @@ def parse_tool_call_span(
         try:
             parsed = upstream_parser(raw, tools)
             return _normalize_parsed_calls(parsed, tools=tools)
+        except NotAToolCall:
+            # The parser says the text is content, not a malformed call: the
+            # formatter returns it as message text. Neither the JSON fallback
+            # nor ToolCallParseError (which fails the request) applies.
+            raise
         except (ValueError, json.JSONDecodeError, SyntaxError) as exc:
             upstream_error = exc
 
