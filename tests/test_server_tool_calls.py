@@ -4,10 +4,13 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from types import SimpleNamespace
 
 import pytest
+from mlx_lm import server as mlx_server
+from mlx_lm import tool_parsers
 from mlx_lm.server import ToolCallFormatter
 from mlx_lm.tool_parsers import gemma4, qwen3_coder
 
@@ -16,6 +19,7 @@ try:
 except ImportError:  # mlx-lm without eejd/py-mlx-lm#8
     NotAToolCall = llama3 = None
 
+from dflash_mlx.server import tool_calls as tool_calls_module
 from dflash_mlx.server.tool_calls import (
     ToolCallParseError,
     apply_tool_choice,
@@ -139,6 +143,51 @@ def test_llama3_parser_through_the_dflash_wrapper():
     assert formatter(["<|python_tag|>print(1)"]) == ([], "print(1)")
     undeclared = '{"name": "other", "parameters": {}}'
     assert formatter([undeclared]) == ([], undeclared)
+
+
+def _module_without_mlx_lm_not_a_tool_call(monkeypatch):
+    """A copy of dflash's tool_calls module, imported as if mlx-lm had no NotAToolCall."""
+    monkeypatch.delattr(tool_parsers, "NotAToolCall", raising=False)
+    spec = importlib.util.spec_from_file_location(
+        "_dflash_tool_calls_without_not_a_tool_call", tool_calls_module.__file__
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_wrapper_without_mlx_lm_not_a_tool_call_keeps_the_error_contract(monkeypatch):
+    module = _module_without_mlx_lm_not_a_tool_call(monkeypatch)
+    # The stand-in is dflash's own class, not mlx-lm's.
+    assert module.NotAToolCall.__module__ == module.__name__
+    assert issubclass(module.NotAToolCall, ValueError)
+
+    def bad_value(text, tools):
+        raise ValueError("cannot parse")
+
+    # A plain parser ValueError still falls back to JSON, then fails the request.
+    call = json.dumps({"name": "lookup", "arguments": {"query": "x"}})
+    assert module.make_tool_parser(bad_value)(call, _tools()) == [
+        {"id": None, "name": "lookup", "arguments": {"query": "x"}}
+    ]
+    with pytest.raises(module.ToolCallParseError, match="failed to parse tool call"):
+        module.make_tool_parser(bad_value)("not json", _tools())
+
+    # The stand-in is the one exception that is not turned into an error.
+    def not_a_call(text, tools):
+        raise module.NotAToolCall("content")
+
+    with pytest.raises(module.NotAToolCall):
+        module.make_tool_parser(not_a_call)(call, _tools())
+
+
+def test_wrapper_uses_the_not_a_tool_call_class_mlx_lm_knows():
+    # mlx_lm.server imports the class its ToolCallFormatter catches. If mlx-lm moves it
+    # and dflash's import falls back to the stand-in, the passthrough silently stops.
+    known = getattr(mlx_server, "NotAToolCall", None)
+    if known is None:
+        pytest.skip("mlx-lm without eejd/py-mlx-lm#8")
+    assert tool_calls_module.NotAToolCall is known
 
 
 def test_openai_function_shape_accepts_string_arguments():

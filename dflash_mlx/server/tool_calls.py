@@ -16,7 +16,10 @@ try:
     # mlx-lm local builds with eejd/py-mlx-lm#8: a parser raises NotAToolCall for text
     # that is not a call, and ToolCallFormatter returns that text as message content.
     from mlx_lm.tool_parsers import NotAToolCall
-except ImportError:  # earlier mlx-lm: no parser raises it
+except ImportError:
+    # mlx-lm without #8: its ToolCallFormatter does not know NotAToolCall and no
+    # parser raises it; the class only keeps the `except NotAToolCall` clause valid.
+    # tests/test_server_tool_calls.py runs this path against a copy of the module.
 
     class NotAToolCall(ValueError):  # type: ignore[no-redef]
         pass
