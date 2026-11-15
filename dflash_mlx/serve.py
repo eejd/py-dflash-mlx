@@ -433,6 +433,7 @@ class DFlashAPIHandler(mlx_server.APIHandler):
         self.logprobs = body.get("logprobs", False)
         self.top_logprobs = body.get("top_logprobs", -1)
         self.seed = body.get("seed", None)
+        self.stop = body.get("stop")
         self.ignore_eos = body.get("ignore_eos")
         self.chat_template_kwargs = body.get("chat_template_kwargs")
         self.tool_choice = body.get("tool_choice")
