@@ -151,6 +151,8 @@ class DFlashResponseGenerator(mlx_server.ResponseGenerator):
     ):
         include_thinking = bool(getattr(self, "_current_thinking_enabled", True))
         if _READER_TEXT_STATE_MACHINE_API:
+            # mlx-lm >= 0.32.2-local06 builds its machines per request: no cache,
+            # and the starting state travels in the GenerationContext.
             return _make_text_state_machines(
                 tokenizer=tokenizer,
                 stop_words=stop_words,
