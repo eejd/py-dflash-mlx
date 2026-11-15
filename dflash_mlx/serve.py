@@ -39,6 +39,7 @@ from dflash_mlx.server.config import (
     normalize_cli_args,
 )
 from dflash_mlx.server.protocol import (
+    READER_TEXT_STATE_MACHINE_API as _READER_TEXT_STATE_MACHINE_API,
     STATEFUL_SERVER_API as _STATEFUL_SERVER_API,
     TEXT_STATE_MACHINE_API as _TEXT_STATE_MACHINE_API,
     make_state_machine as _make_state_machine,
@@ -146,8 +147,18 @@ class DFlashResponseGenerator(mlx_server.ResponseGenerator):
         tokenizer,
         stop_words,
         initial_state="normal",
+        ignore_eos=False,
     ):
         include_thinking = bool(getattr(self, "_current_thinking_enabled", True))
+        if _READER_TEXT_STATE_MACHINE_API:
+            # mlx-lm >= 0.32.2-local06 builds its machines per request: no cache,
+            # and the starting state travels in the GenerationContext.
+            return _make_text_state_machines(
+                tokenizer=tokenizer,
+                stop_words=stop_words,
+                ignore_eos=ignore_eos,
+                include_thinking=include_thinking,
+            )
         if _TEXT_STATE_MACHINE_API:
             # mlx-lm >= 0.32 uses (StopSequences, TextStateMachine); the
             # starting state travels in the GenerationContext instead.
@@ -201,8 +212,13 @@ class DFlashResponseGenerator(mlx_server.ResponseGenerator):
                 self.model_provider.model_key,
                 tokenizer,
                 args.stop_words,
+                ignore_eos=bool(getattr(args, "ignore_eos", False)),
             )
             sm = stop_sequences.matcher()
+            if _READER_TEXT_STATE_MACHINE_API:
+                from mlx_lm.generate import TextStateMachine
+
+                sm_state = TextStateMachine.from_stop_words(args.stop_words).reader()
         elif _STATEFUL_SERVER_API and hasattr(self, "_make_state_machine"):
             sm, sequences = self._make_state_machine(
                 self.model_provider.model_key,
@@ -419,6 +435,8 @@ class DFlashAPIHandler(mlx_server.APIHandler):
         self.logprobs = body.get("logprobs", False)
         self.top_logprobs = body.get("top_logprobs", -1)
         self.seed = body.get("seed", None)
+        self.stop = body.get("stop")
+        self.ignore_eos = body.get("ignore_eos")
         self.chat_template_kwargs = body.get("chat_template_kwargs")
         self.tool_choice = body.get("tool_choice")
         self.parallel_tool_calls = normalize_parallel_tool_calls(

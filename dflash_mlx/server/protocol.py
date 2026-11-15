@@ -20,6 +20,11 @@ TEXT_STATE_MACHINE_API = "text_sm" in getattr(
     mlx_server.GenerationContext, "__annotations__", {}
 )
 STATEFUL_SERVER_API = "state" in getattr(mlx_server.Response, "__annotations__", {})
+from importlib import import_module
+
+_TextStateMachine = getattr(import_module("mlx_lm.generate"), "TextStateMachine", None)
+READER_TEXT_STATE_MACHINE_API = hasattr(_TextStateMachine, "from_tokenizer")
+
 
 # `ResponseGenerator._tokenize` returns (prompt, segments, segment_types,
 # initial_state) in mlx-lm <= 0.32.0 and appends `vision` (the images of the
@@ -82,9 +87,12 @@ def build_generation_context(
     thinking = tokenizer.has_thinking if has_thinking is None else bool(has_thinking)
     if TEXT_STATE_MACHINE_API:
         if text_sm is None:
-            from mlx_lm.generate import make_text_state_machine
+            if READER_TEXT_STATE_MACHINE_API:
+                text_sm = _TextStateMachine.from_tokenizer(tokenizer)
+            else:
+                from mlx_lm.generate import make_text_state_machine
 
-            text_sm = make_text_state_machine(tokenizer, stop_words)
+                text_sm = make_text_state_machine(tokenizer, stop_words)
         return mlx_server.GenerationContext(
             has_thinking=thinking,
             has_tool_calling=tokenizer.has_tool_calling,
@@ -134,15 +142,20 @@ def make_text_state_machines(
     tokenizer: Any,
     stop_words: list[str],
     include_thinking: bool = True,
+    ignore_eos: bool = False,
 ):
     """(StopSequences, TextStateMachine) for the mlx-lm >= 0.32 server API.
 
     With reasoning disabled the machine has no reasoning transitions, the same
     rule make_state_machine applies to the token-level machine.
     """
-    from mlx_lm.generate import make_stop_sequences, make_text_state_machine
+    from mlx_lm.generate import make_stop_sequences
 
     view = tokenizer if include_thinking else _WithoutThinking(tokenizer)
+    if READER_TEXT_STATE_MACHINE_API:
+        return make_stop_sequences(view, ignore_eos=ignore_eos), _TextStateMachine.from_tokenizer(view)
+    from mlx_lm.generate import make_text_state_machine
+
     return (
         make_stop_sequences(view, stop_words),
         make_text_state_machine(view, stop_words),

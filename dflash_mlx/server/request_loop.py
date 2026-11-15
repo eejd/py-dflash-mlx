@@ -57,6 +57,7 @@ def consume_dflash_events(
     max_tokens: int,
     eos_token_ids: set[int],
     request_start_ns: int,
+    ignore_eos: bool = False,
     prefix_flow: Optional[PrefixCacheFlow] = None,
     sm: Optional[Any] = None,
     sm_state: Optional[Any] = None,
@@ -212,7 +213,9 @@ def consume_dflash_events(
                 generated_token_ids = list(event.generated_token_ids)
                 if generated_token_ids:
                     last_token = int(generated_token_ids[-1])
-                    if last_token in eos_token_ids:
+                    if client_done and pending_finish_reason is not None:
+                        finish_reason = pending_finish_reason
+                    elif last_token in eos_token_ids and not ignore_eos:
                         finish_reason = "stop"
                     elif int(event.generation_tokens) >= int(max_tokens):
                         finish_reason = "length"
@@ -272,7 +275,7 @@ def consume_dflash_events(
                 sm_state,
                 token,
             )
-            if terminal_match or token in eos_token_ids:
+            if terminal_match or (token in eos_token_ids and not ignore_eos):
                 token_finish_reason = "stop"
             elif live_token_count >= int(max_tokens):
                 token_finish_reason = "length"
@@ -281,6 +284,16 @@ def consume_dflash_events(
             if token not in eos_token_ids:
                 detokenizer.add_token(token)
                 text = detokenizer.last_segment
+
+            # New mlx-lm matches user stop words on decoded text, so matches
+            # spanning tokens (or different tokenizations) are handled too.
+            if sm_state is not None and hasattr(sm_state, "feed"):
+                delta = sm_state.feed(text)
+                text = delta.content
+                if sm_state.stopped:
+                    token_finish_reason = "stop"
+                if token_finish_reason is not None:
+                    text += sm_state.finish().content
 
             if not first_token_flushed:
                 rqueue.put(
@@ -350,6 +363,8 @@ def consume_dflash_events(
 
     detokenizer.finalize()
     tail = detokenizer.last_segment
+    if sm_state is not None and hasattr(sm_state, "feed"):
+        tail = sm_state.finish(tail).content
     if pending_token is not None:
         rqueue.put(
             make_response(

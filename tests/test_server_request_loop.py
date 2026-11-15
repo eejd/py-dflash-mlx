@@ -119,6 +119,54 @@ def test_consume_dflash_events_streams_pending_token_and_summary():
     assert responses[1].text == "T11"
 
 
+@pytest.mark.parametrize(
+    ("stop", "tokens", "limit", "expected", "reason"),
+    [("T10T11", [10, 11], 2, "", "stop"),
+     ("T10T11", [10, 12], 2, "T10T12", "length")],
+)
+def test_text_stop_reader_handles_split_and_partial_markers(stop, tokens, limit, expected, reason):
+    from dflash_mlx.server.protocol import READER_TEXT_STATE_MACHINE_API
+    if not READER_TEXT_STATE_MACHINE_API:
+        pytest.skip("needs reader-based mlx-lm")
+    from mlx_lm.generate import TextStateMachine
+
+    queue = SimpleQueue()
+    events = ClosableEvents([
+        TokenEvent(token_id=token, generated_tokens=i, acceptance_ratio=0.5, cycles_completed=1)
+        for i, token in enumerate(tokens, 1)
+    ] + [SummaryEvent(
+        elapsed_us=10.0, prompt_token_count=1, generated_token_ids=tuple(tokens),
+        generation_tokens=len(tokens), accepted_from_draft=1, acceptance_ratio=0.5,
+        cycles_completed=1, phase_timings_us={},
+    )])
+    consume_dflash_events(
+        event_iter=events, rqueue=queue, ctx=FakeContext(), tokenizer=FakeTokenizer(),
+        prompt=[1], max_tokens=limit, eos_token_ids={0}, request_start_ns=0,
+        sm_state=TextStateMachine.from_stop_words([stop]).reader(),
+    )
+    responses = []
+    while not queue.empty():
+        responses.append(queue.get())
+    assert "".join(response.text for response in responses) == expected
+    assert responses[-1].finish_reason == reason
+
+
+def test_ignore_eos_does_not_terminate_stream():
+    queue = SimpleQueue()
+    events = ClosableEvents([
+        TokenEvent(token_id=token, generated_tokens=i, acceptance_ratio=0.5, cycles_completed=1)
+        for i, token in enumerate([0, 11], 1)
+    ])
+    consume_dflash_events(
+        event_iter=events, rqueue=queue, ctx=FakeContext(), tokenizer=FakeTokenizer(),
+        prompt=[1], max_tokens=2, eos_token_ids={0}, request_start_ns=0, ignore_eos=True,
+    )
+    responses = []
+    while not queue.empty():
+        responses.append(queue.get())
+    assert [response.text for response in responses] == ["", "T11"]
+    assert responses[-1].finish_reason == "length"
+
 def test_consume_dflash_events_updates_live_metrics_from_engine_events(monkeypatch):
     _reset_live_metrics_state()
     monkeypatch.setattr(metrics_mod, "current_runtime_cache_manager", lambda: None)

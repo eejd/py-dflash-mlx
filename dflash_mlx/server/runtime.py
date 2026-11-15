@@ -140,6 +140,9 @@ class ServerRuntime:
 
         stop_token_ids = get_stop_token_ids(tokenizer)
         eos_token_ids = set(int(token_id) for token_id in tokenizer.eos_token_ids)
+        ignore_eos = bool(getattr(args, "ignore_eos", False))
+        if ignore_eos:
+            stop_token_ids = [token for token in stop_token_ids if token not in eos_token_ids]
         request_start_ns = time.perf_counter_ns()
         prefix_flow = PrefixCacheFlow.for_request(
             model_provider=self.model_provider,
@@ -191,6 +194,7 @@ class ServerRuntime:
             prompt=prepared.prompt,
             max_tokens=int(args.max_tokens),
             eos_token_ids=eos_token_ids,
+            ignore_eos=ignore_eos,
             request_start_ns=request_start_ns,
             prefix_flow=prefix_flow,
             sm=prepared.state_machine,

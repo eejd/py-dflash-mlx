@@ -473,6 +473,10 @@ def test_response_generator_keeps_reasoning_state_when_thinking_is_on():
     assert sequences[(10,)] == "<think>"
 
 def _text_state_after(text_sm, text, initial="normal"):
+    if hasattr(text_sm, "reader"):
+        reader = text_sm.reader(state=initial)
+        reader.feed(text)
+        return reader._state
     _state, _clean, current = text_sm.step(text_sm.make_state(initial), text)
     return current
 
@@ -503,9 +507,12 @@ def test_response_generator_text_machine_keeps_reasoning_when_thinking_is_on():
     )
 
     assert _text_state_after(text_sm, "<think>") == "reasoning"
-    # the stop matcher flags EOS and stop-word tokens
+    # The reader API matches stop words on decoded text, rather than tokens.
     matcher = stop.matcher()
     assert matcher.advance(5) is False
+    for token in _ThinkingTokenizer().encode("END"):
+        matched = matcher.advance(token)
+    assert matched is (not hasattr(text_sm, "reader"))
     assert matcher.advance(0) is True
 
 @text_api_only
@@ -518,6 +525,28 @@ def test_generation_context_carries_text_state_machine_and_initial_state():
 
     assert ctx.initial_state == "reasoning"
     assert _text_state_after(ctx.text_sm, "</think>", "reasoning") == "normal"
+
+
+@text_api_only
+@pytest.mark.parametrize(
+    ("initial", "partial", "field"),
+    [("normal", "<thi", "content"), ("reasoning", "</thi", "reasoning")],
+)
+def test_text_reader_finish_releases_partial_marker(initial, partial, field):
+    generator = object.__new__(DFlashResponseGenerator)
+    generator._state_machine_cache = {}
+    generator._current_thinking_enabled = True
+    _stop, text_sm = generator._make_state_machine(
+        ("model", None, "draft"), _ThinkingTokenizer(), []
+    )
+    if not hasattr(text_sm, "reader"):
+        pytest.skip("needs the mlx-lm text reader API")
+    reader = text_sm.reader(state=initial)
+
+    delta = reader.feed("text" + partial)
+    assert getattr(delta, field) == "text"
+    delta = reader.finish()
+    assert getattr(delta, field) == partial
 
 def test_generation_context_honors_effective_thinking_flag():
     tokenizer = _ThinkingTokenizer()
