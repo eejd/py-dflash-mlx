@@ -213,7 +213,9 @@ def consume_dflash_events(
                 generated_token_ids = list(event.generated_token_ids)
                 if generated_token_ids:
                     last_token = int(generated_token_ids[-1])
-                    if last_token in eos_token_ids:
+                    if client_done and pending_finish_reason is not None:
+                        finish_reason = pending_finish_reason
+                    elif last_token in eos_token_ids and not ignore_eos:
                         finish_reason = "stop"
                     elif int(event.generation_tokens) >= int(max_tokens):
                         finish_reason = "length"

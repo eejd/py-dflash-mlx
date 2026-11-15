@@ -121,7 +121,7 @@ def test_consume_dflash_events_streams_pending_token_and_summary():
 
 @pytest.mark.parametrize(
     ("stop", "tokens", "limit", "expected", "reason"),
-    [("T10T11", [10, 11], 8, "", "stop"),
+    [("T10T11", [10, 11], 2, "", "stop"),
      ("T10T11", [10, 12], 2, "T10T12", "length")],
 )
 def test_text_stop_reader_handles_split_and_partial_markers(stop, tokens, limit, expected, reason):
@@ -134,7 +134,11 @@ def test_text_stop_reader_handles_split_and_partial_markers(stop, tokens, limit,
     events = ClosableEvents([
         TokenEvent(token_id=token, generated_tokens=i, acceptance_ratio=0.5, cycles_completed=1)
         for i, token in enumerate(tokens, 1)
-    ])
+    ] + [SummaryEvent(
+        elapsed_us=10.0, prompt_token_count=1, generated_token_ids=tuple(tokens),
+        generation_tokens=len(tokens), accepted_from_draft=1, acceptance_ratio=0.5,
+        cycles_completed=1, phase_timings_us={},
+    )])
     consume_dflash_events(
         event_iter=events, rqueue=queue, ctx=FakeContext(), tokenizer=FakeTokenizer(),
         prompt=[1], max_tokens=limit, eos_token_ids={0}, request_start_ns=0,
